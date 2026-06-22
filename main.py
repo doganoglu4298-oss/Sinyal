@@ -7,7 +7,7 @@ from binance.client import Client
 BOT_TOKEN = os.getenv("8844263738:AAFOWc2MH4BxEeXQoxm7LbIy1YPdQaY6wE8")
 CHAT_ID = os.getenv("8560896518")
 
-SYMBOLS = ["SOLUSDT", "WLDUSDT", "SPACEUSDT"]
+SYMBOLS = ["SOLUSDT", "WLDUSDT"]
 INTERVAL = Client.KLINE_INTERVAL_15MINUTE
 
 client = Client()
