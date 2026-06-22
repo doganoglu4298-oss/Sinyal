@@ -2,386 +2,711 @@ import os
 import time
 import requests
 import pandas as pd
+
 from datetime import datetime
 from binance.client import Client
+
+
+# ======================
+# TELEGRAM AYAR
+# ======================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-SYMBOLS = [
-    "SOLUSDT",
-    "WLDUSDT"
-]
 
-RSI_LEN = 10
-ATR_LEN = 10
-VOL_LEN = 40
-SL_ATR = 0.8
-RR = 2.5
+
+# ======================
+# BINANCE AYAR
+# ======================
 
 client = Client()
 
+
+
+# ======================
+# COIN LİSTESİ
+# ======================
+
+SYMBOLS = [
+
+    "SOLUSDT",
+    "WLDUSDT"
+
+]
+
+
+
+# ======================
+# STRATEJİ AYARLARI
+# ======================
+
+TIMEFRAME = Client.KLINE_INTERVAL_15MINUTE
+
+RSI_LEN = 10
+
+ATR_LEN = 10
+
+VOL_LEN = 40
+
+
+SL_ATR = 0.8
+
+RR = 2.5
+
+
+
 last_signal = {}
+
+last_scan_time = "Başlatılmadı"
+
 last_update_id = 0
-last_scan_time = "Henüz tarama yapılmadı"
 
-def send_telegram(msg):
+
+
+
+# ======================
+# TELEGRAM MESAJ
+# ======================
+
+def send_telegram(message):
+
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": CHAT_ID,
-                "text": msg
-            },
-            timeout=10
-        )
-    except Exception as e:
-        print("Telegram hata:", e)
 
-def rsi(series, period=14):
+        requests.post(
+
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+
+            json={
+
+                "chat_id": CHAT_ID,
+
+                "text": message
+
+            },
+
+            timeout=10
+
+        )
+
+
+    except Exception as e:
+
+        print(
+            "Telegram hata:",
+            e
+        )
+
+
+
+
+
+# ======================
+# RSI
+# ======================
+
+def calculate_rsi(series, period):
+
+
     delta = series.diff()
 
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
 
-    avg_gain = gain.rolling(period).mean()
-    avg_loss = loss.rolling(period).mean()
+    gain = delta.clip(lower=0)
+
+    loss = -delta.clip(upper=0)
+
+
+
+    avg_gain = (
+        gain
+        .rolling(period)
+        .mean()
+    )
+
+
+    avg_loss = (
+        loss
+        .rolling(period)
+        .mean()
+    )
+
+
 
     rs = avg_gain / avg_loss
 
-    return 100 - (100 / (1 + rs))
 
-def atr(df, period=14):
 
-    high_low = df["high"] - df["low"]
+    return (
+        100 -
+        (100 / (1 + rs))
+    )
+
+
+
+
+
+
+# ======================
+# ATR
+# ======================
+
+def calculate_atr(df, period):
+
+
+    high_low = (
+        df["high"]
+        -
+        df["low"]
+    )
+
+
 
     high_close = (
-        df["high"] - df["close"].shift()
+
+        df["high"]
+        -
+        df["close"].shift()
+
     ).abs()
+
+
 
     low_close = (
-        df["low"] - df["close"].shift()
+
+        df["low"]
+        -
+        df["close"].shift()
+
     ).abs()
 
+
+
     tr = pd.concat(
-        [high_low, high_close, low_close],
+
+        [
+
+            high_low,
+
+            high_close,
+
+            low_close
+
+        ],
+
         axis=1
+
     ).max(axis=1)
 
-    return tr.rolling(period).mean()
 
-def get_market_data(symbol):
 
-    klines = client.get_klines(
-        symbol=symbol,
-        interval=Client.KLINE_INTERVAL_15MINUTE,
-        limit=250
+    return (
+
+        tr
+        .rolling(period)
+        .mean()
+
     )
+
+
+
+
+
+# ======================
+# VERİ ÇEKME
+# ======================
+
+def get_data(symbol):
+
+
+    candles = client.get_klines(
+
+        symbol=symbol,
+
+        interval=TIMEFRAME,
+
+        limit=250
+
+    )
+
+
 
     df = pd.DataFrame(
-        klines,
+
+        candles,
+
         columns=[
-            "open_time","open","high","low",
-            "close","volume",
-            "close_time","qav",
-            "num_trades",
-            "taker_base",
-            "taker_quote",
+
+            "time",
+
+            "open",
+
+            "high",
+
+            "low",
+
+            "close",
+
+            "volume",
+
+            "close_time",
+
+            "qav",
+
+            "trades",
+
+            "tb",
+
+            "tq",
+
             "ignore"
+
         ]
+
     )
 
+
+
     for col in [
+
         "open",
+
         "high",
+
         "low",
+
         "close",
+
         "volume"
+
     ]:
+
+
         df[col] = df[col].astype(float)
 
+
+
     return df
-def analyze_coin(symbol):
+    # ======================
+# SİNYAL HESAPLAMA
+# ======================
 
-    try:
+def check_signal(df):
 
-        symbol = symbol.upper()
 
-        df = get_market_data(symbol)
+    df["RSI"] = calculate_rsi(
+        df["close"],
+        RSI_LEN
+    )
 
-        ema50 = df["close"].ewm(span=50).mean()
-        ema200 = df["close"].ewm(span=200).mean()
 
-        rsi_values = rsi(df["close"], RSI_LEN)
+    df["ATR"] = calculate_atr(
+        df,
+        ATR_LEN
+    )
 
-        vol_sma = df["volume"].rolling(VOL_LEN).mean()
 
-        current_close = df["close"].iloc[-1]
-        current_rsi = rsi_values.iloc[-1]
+    df["VOL_AVG"] = (
 
-        bull_trend = ema50.iloc[-1] > ema200.iloc[-1]
+        df["volume"]
+        .rolling(VOL_LEN)
+        .mean()
 
-        vwap = (
-            (df["close"] * df["volume"]).cumsum()
-            / df["volume"].cumsum()
-        )
+    )
 
-        above_vwap = current_close > vwap.iloc[-1]
 
-        vol_filter = (
-            df["volume"].iloc[-1]
-            > vol_sma.iloc[-1]
-        )
 
-        msg = (
-            f"📊 {symbol}\n\n"
-            f"Fiyat: {current_close:.4f}\n"
-            f"RSI: {current_rsi:.2f}\n\n"
-            f"Trend: {'BULL ✅' if bull_trend else 'BEAR ❌'}\n"
-            f"VWAP: {'✅' if above_vwap else '❌'}\n"
-            f"Hacim: {'✅' if vol_filter else '❌'}\n\n"
-            f"Son Tarama:\n{last_scan_time}"
-        )
+    last = df.iloc[-1]
 
-        send_telegram(msg)
+    prev = df.iloc[-2]
 
-    except Exception as e:
-        send_telegram(f"❌ Hata: {e}")
 
-def handle_command(text):
 
-    if text.startswith("/coin"):
+    price = last["close"]
 
-        parts = text.split()
+    rsi_now = last["RSI"]
 
-        if len(parts) < 2:
+    atr_now = last["ATR"]
 
-            send_telegram(
-                "Kullanım:\n/coin SOLUSDT"
+
+
+    volume_ok = (
+
+        last["volume"]
+
+        >
+
+        last["VOL_AVG"]
+
+    )
+
+
+
+    signal = None
+
+
+
+    # LONG
+
+    if (
+
+        prev["RSI"] < 30
+
+        and
+
+        rsi_now > 30
+
+        and
+
+        volume_ok
+
+    ):
+
+
+        signal = "LONG"
+
+
+
+
+    # SHORT
+
+    elif (
+
+        prev["RSI"] > 70
+
+        and
+
+        rsi_now < 70
+
+        and
+
+        volume_ok
+
+    ):
+
+
+        signal = "SHORT"
+
+
+
+
+    if signal:
+
+
+        if signal == "LONG":
+
+
+            sl = (
+
+                price
+
+                -
+
+                (atr_now * SL_ATR)
+
             )
 
-            return
 
-        analyze_coin(parts[1])
+            tp = (
 
-    elif text == "/status":
+                price
 
-        send_telegram(
-            f"🤖 Yusuf Scalp V5 AKTİF\n\n"
-            f"Takip Edilen Coinler:\n"
-            f"{', '.join(SYMBOLS)}\n\n"
-            f"Son Tarama:\n"
-            f"{last_scan_time}"
-        )
+                +
 
-def get_updates():
+                ((price-sl) * RR)
+
+            )
+
+
+
+        else:
+
+
+            sl = (
+
+                price
+
+                +
+
+                (atr_now * SL_ATR)
+
+            )
+
+
+            tp = (
+
+                price
+
+                -
+
+                ((sl-price) * RR)
+
+            )
+
+
+
+
+        return {
+
+
+            "signal": signal,
+
+            "price": price,
+
+            "rsi": rsi_now,
+
+            "tp": tp,
+
+            "sl": sl
+
+
+        }
+
+
+
+    return None
+
+
+
+
+
+
+# ======================
+# PİYASA TARAMA
+# ======================
+
+
+def scan():
+
+
+    global last_scan_time
+
+
+
+    last_scan_time = datetime.now().strftime(
+
+        "%d-%m-%Y %H:%M:%S"
+
+    )
+
+
+
+    for symbol in SYMBOLS:
+
+
+        try:
+
+
+            df = get_data(symbol)
+
+
+            result = check_signal(df)
+
+
+
+            if result:
+
+
+                key = (
+
+                    symbol,
+
+                    result["signal"]
+
+                )
+
+
+
+                if key in last_signal:
+
+                    continue
+
+
+
+                last_signal[key] = True
+
+
+
+
+                msg = f"""
+
+🚨 RSI ALARM
+
+Coin:
+{symbol}
+
+
+Yön:
+{result['signal']}
+
+
+Fiyat:
+{result['price']:.4f}
+
+
+RSI:
+{result['rsi']:.2f}
+
+
+🎯 TP:
+{result['tp']:.4f}
+
+
+🛑 SL:
+{result['sl']:.4f}
+
+
+⏱
+{last_scan_time}
+
+"""
+
+
+
+                send_telegram(msg)
+
+
+
+
+        except Exception as e:
+
+
+            print(
+
+                symbol,
+
+                "hata:",
+
+                e
+
+            )
+
+
+
+
+
+
+# ======================
+# TELEGRAM KOMUT
+# ======================
+
+
+def telegram_check():
+
 
     global last_update_id
 
+
+
     try:
+
 
         url = (
+
             f"https://api.telegram.org/"
+
             f"bot{BOT_TOKEN}/getUpdates"
+
         )
 
-        r = requests.get(
+
+
+        data = requests.get(
+
             url,
+
             params={
-                "offset": last_update_id + 1,
-                "timeout": 1
+
+                "offset":
+
+                last_update_id + 1,
+
+                "timeout":5
+
             },
-            timeout=5
-        )
 
-        data = r.json()
+            timeout=10
 
-        if not data.get("ok"):
-            return
+        ).json()
 
-        for update in data["result"]:
 
-            last_update_id = update["update_id"]
 
-            if "message" not in update:
-                continue
+        for item in data.get(
 
-            text = update["message"].get(
-                "text",
-                ""
+            "result",
+
+            []
+
+        ):
+
+
+            last_update_id = item["update_id"]
+
+
+
+            text = (
+
+                item
+
+                .get("message",{})
+
+                .get("text","")
+
             )
 
-            handle_command(text)
+
+
+            if text == "/durum":
+
+
+
+                send_telegram(
+
+f"""
+
+🤖 BOT AKTİF
+
+Son tarama:
+
+{last_scan_time}
+
+
+Takip:
+
+{', '.join(SYMBOLS)}
+
+"""
+
+                )
+
+
 
     except Exception as e:
 
+
         print(
-            "Telegram komut hatası:",
+
+            "Telegram kontrol hata:",
+
             e
-        )
-        def check_symbol(symbol):
 
-    try:
-
-        df = get_market_data(symbol)
-
-        ema50 = df["close"].ewm(span=50).mean()
-        ema200 = df["close"].ewm(span=200).mean()
-
-        rsi_values = rsi(df["close"], RSI_LEN)
-
-        atr_values = atr(df, ATR_LEN)
-
-        vol_sma = df["volume"].rolling(VOL_LEN).mean()
-
-        current_close = df["close"].iloc[-1]
-        current_rsi = rsi_values.iloc[-1]
-        prev_rsi = rsi_values.iloc[-2]
-
-        current_atr = atr_values.iloc[-1]
-
-        bull_trend = ema50.iloc[-1] > ema200.iloc[-1]
-        bear_trend = ema50.iloc[-1] < ema200.iloc[-1]
-
-        vol_filter = (
-            df["volume"].iloc[-1]
-            > vol_sma.iloc[-1]
         )
 
-        vwap = (
-            (df["close"] * df["volume"]).cumsum()
-            / df["volume"].cumsum()
-        )
 
-        above_vwap = current_close > vwap.iloc[-1]
-        below_vwap = current_close < vwap.iloc[-1]
 
-        trend_text = (
-            "BULL" if bull_trend
-            else "BEAR" if bear_trend
-            else "SIDE"
-        )
 
-        print(
-            f"[{datetime.now().strftime('%H:%M:%S')}] "
-            f"{symbol} | "
-            f"Trend={trend_text} | "
-            f"Close={current_close:.4f} | "
-            f"VWAP={vwap.iloc[-1]:.4f} | "
-            f"VOL={df['volume'].iloc[-1]:.0f}/{vol_sma.iloc[-1]:.0f} | "
-            f"RSI={current_rsi:.2f}"
-        )
 
-        long_signal = (
-            bull_trend
-            and above_vwap
-            and prev_rsi < 45
-            and current_rsi >= 45
-            and vol_filter
-        )
+# ======================
+# ANA DÖNGÜ
+# ======================
 
-        short_signal = (
-            bear_trend
-            and below_vwap
-            and prev_rsi > 55
-            and current_rsi <= 55
-            and vol_filter
-        )
-
-        if long_signal:
-
-            entry = current_close
-            stop = entry - (current_atr * SL_ATR)
-
-            risk = entry - stop
-
-            tp = entry + (risk * RR)
-
-            if last_signal.get(symbol) != "LONG":
-
-                msg = (
-                    f"🚀 LONG\n\n"
-                    f"{symbol}\n\n"
-                    f"Giriş: {entry:.4f}\n"
-                    f"Stop: {stop:.4f}\n"
-                    f"TP: {tp:.4f}\n\n"
-                    f"RSI: {current_rsi:.2f}\n"
-                    f"ATR: {current_atr:.4f}\n"
-                    f"RR: {RR}"
-                )
-
-                send_telegram(msg)
-
-                last_signal[symbol] = "LONG"
-
-        elif short_signal:
-
-            entry = current_close
-            stop = entry + (current_atr * SL_ATR)
-
-            risk = stop - entry
-
-            tp = entry - (risk * RR)
-
-            if last_signal.get(symbol) != "SHORT":
-
-                msg = (
-                    f"🔻 SHORT\n\n"
-                    f"{symbol}\n\n"
-                    f"Giriş: {entry:.4f}\n"
-                    f"Stop: {stop:.4f}\n"
-                    f"TP: {tp:.4f}\n\n"
-                    f"RSI: {current_rsi:.2f}\n"
-                    f"ATR: {current_atr:.4f}\n"
-                    f"RR: {RR}"
-                )
-
-                send_telegram(msg)
-
-                last_signal[symbol] = "SHORT"
-
-    except Exception as e:
-
-        print(f"{symbol} hata: {e}")
-
-print("Yusuf Scalp V5 başlatıldı")
-
-last_scan = 0
 
 while True:
 
-    try:
 
-        now = time.time()
+    scan()
 
-        # Telegram komutlarını her 5 saniyede kontrol et
-        get_updates()
 
-        # Coin taramasını her 60 saniyede yap
-        if now - last_scan >= 60:
+    telegram_check()
 
-            for symbol in SYMBOLS:
-                check_symbol(symbol)
 
-            last_scan_time = datetime.now().strftime(
-                "%d-%m-%Y %H:%M:%S"
-            )
-
-            print(
-                f"\n[{last_scan_time}] "
-                f"Tarama tamamlandı. "
-                f"60 saniye sonra tekrar taranacak.\n"
-            )
-
-            last_scan = now
-
-        time.sleep(5)
-
-    except Exception as e:
-
-        print(
-            f"[{datetime.now().strftime('%d-%m-%Y %H:%M:%S')}] "
-            f"Genel hata: {e}"
-        )
-
-        time.sleep(5)
+    time.sleep(60)
