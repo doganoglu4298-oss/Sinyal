@@ -2,711 +2,327 @@ import os
 import time
 import requests
 import pandas as pd
-
 from datetime import datetime
 from binance.client import Client
-
-
-# ======================
-# TELEGRAM AYAR
-# ======================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-
-
-# ======================
-# BINANCE AYAR
-# ======================
-
 client = Client()
 
-
-
-# ======================
-# COIN LİSTESİ
-# ======================
-
 SYMBOLS = [
-
     "SOLUSDT",
     "WLDUSDT"
-
 ]
-
-
-
-# ======================
-# STRATEJİ AYARLARI
-# ======================
 
 TIMEFRAME = Client.KLINE_INTERVAL_15MINUTE
 
 RSI_LEN = 10
-
 ATR_LEN = 10
-
 VOL_LEN = 40
 
-
 SL_ATR = 0.8
-
 RR = 2.5
 
-
-
 last_signal = {}
-
-last_scan_time = "Başlatılmadı"
-
+last_scan = "Başlatılmadı"
 last_update_id = 0
 
 
-
-
-# ======================
-# TELEGRAM MESAJ
-# ======================
-
-def send_telegram(message):
-
+def send_telegram(msg):
     try:
-
         requests.post(
-
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-
             json={
-
                 "chat_id": CHAT_ID,
-
-                "text": message
-
+                "text": msg
             },
-
             timeout=10
-
         )
-
-
     except Exception as e:
-
-        print(
-            "Telegram hata:",
-            e
-        )
+        print("Telegram:", e)
 
 
-
-
-
-# ======================
-# RSI
-# ======================
-
-def calculate_rsi(series, period):
-
-
+def calc_rsi(series, period):
     delta = series.diff()
 
-
     gain = delta.clip(lower=0)
-
     loss = -delta.clip(upper=0)
 
-
-
-    avg_gain = (
-        gain
-        .rolling(period)
-        .mean()
-    )
-
-
-    avg_loss = (
-        loss
-        .rolling(period)
-        .mean()
-    )
-
-
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
 
     rs = avg_gain / avg_loss
 
+    return 100 - (100 / (1 + rs))
 
 
-    return (
-        100 -
-        (100 / (1 + rs))
-    )
+def calc_atr(df, period):
+    h_l = df["high"] - df["low"]
 
-
-
-
-
-
-# ======================
-# ATR
-# ======================
-
-def calculate_atr(df, period):
-
-
-    high_low = (
-        df["high"]
-        -
-        df["low"]
-    )
-
-
-
-    high_close = (
-
-        df["high"]
-        -
+    h_c = (
+        df["high"] -
         df["close"].shift()
-
     ).abs()
 
-
-
-    low_close = (
-
-        df["low"]
-        -
+    l_c = (
+        df["low"] -
         df["close"].shift()
-
     ).abs()
-
-
 
     tr = pd.concat(
-
-        [
-
-            high_low,
-
-            high_close,
-
-            low_close
-
-        ],
-
+        [h_l, h_c, l_c],
         axis=1
-
     ).max(axis=1)
 
+    return tr.rolling(period).mean()
 
-
-    return (
-
-        tr
-        .rolling(period)
-        .mean()
-
-    )
-
-
-
-
-
-# ======================
-# VERİ ÇEKME
-# ======================
 
 def get_data(symbol):
 
-
     candles = client.get_klines(
-
         symbol=symbol,
-
         interval=TIMEFRAME,
-
         limit=250
-
     )
-
-
 
     df = pd.DataFrame(
-
         candles,
-
         columns=[
-
             "time",
-
             "open",
-
             "high",
-
             "low",
-
             "close",
-
             "volume",
-
-            "close_time",
-
-            "qav",
-
-            "trades",
-
-            "tb",
-
-            "tq",
-
-            "ignore"
-
+            "x1",
+            "x2",
+            "x3",
+            "x4",
+            "x5",
+            "x6"
         ]
-
     )
 
-
-
-    for col in [
-
+    for c in [
         "open",
-
         "high",
-
         "low",
-
         "close",
-
         "volume"
-
     ]:
-
-
-        df[col] = df[col].astype(float)
-
-
+        df[c] = df[c].astype(float)
 
     return df
-    # ======================
-# SİNYAL HESAPLAMA
-# ======================
-
-def check_signal(df):
 
 
-    df["RSI"] = calculate_rsi(
+def signal_check(df):
+
+    df["RSI"] = calc_rsi(
         df["close"],
         RSI_LEN
     )
 
-
-    df["ATR"] = calculate_atr(
+    df["ATR"] = calc_atr(
         df,
         ATR_LEN
     )
 
-
-    df["VOL_AVG"] = (
-
+    df["VOL"] = (
         df["volume"]
         .rolling(VOL_LEN)
         .mean()
-
     )
-
 
 
     last = df.iloc[-1]
-
     prev = df.iloc[-2]
 
-
-
     price = last["close"]
-
-    rsi_now = last["RSI"]
-
-    atr_now = last["ATR"]
-
+    atr = last["ATR"]
 
 
     volume_ok = (
-
-        last["volume"]
-
-        >
-
-        last["VOL_AVG"]
-
+        last["volume"] >
+        last["VOL"]
     )
-
 
 
     signal = None
 
 
-
-    # LONG
-
     if (
-
         prev["RSI"] < 30
-
-        and
-
-        rsi_now > 30
-
-        and
-
-        volume_ok
-
+        and last["RSI"] > 30
+        and volume_ok
     ):
-
-
         signal = "LONG"
 
 
-
-
-    # SHORT
-
     elif (
-
         prev["RSI"] > 70
-
-        and
-
-        rsi_now < 70
-
-        and
-
-        volume_ok
-
+        and last["RSI"] < 70
+        and volume_ok
     ):
-
-
         signal = "SHORT"
 
 
+    if signal == "LONG":
+
+        sl = price - (atr * SL_ATR)
+
+        tp = price + ((price-sl) * RR)
 
 
-    if signal:
+    elif signal == "SHORT":
+
+        sl = price + (atr * SL_ATR)
+
+        tp = price - ((sl-price) * RR)
 
 
-        if signal == "LONG":
+    else:
+        return None
 
 
-            sl = (
-
-                price
-
-                -
-
-                (atr_now * SL_ATR)
-
-            )
+    return {
+        "signal": signal,
+        "price": price,
+        "rsi": last["RSI"],
+        "tp": tp,
+        "sl": sl
+    }
 
 
-            tp = (
+def scan_market():
 
-                price
+    global last_scan
 
-                +
-
-                ((price-sl) * RR)
-
-            )
-
-
-
-        else:
-
-
-            sl = (
-
-                price
-
-                +
-
-                (atr_now * SL_ATR)
-
-            )
-
-
-            tp = (
-
-                price
-
-                -
-
-                ((sl-price) * RR)
-
-            )
-
-
-
-
-        return {
-
-
-            "signal": signal,
-
-            "price": price,
-
-            "rsi": rsi_now,
-
-            "tp": tp,
-
-            "sl": sl
-
-
-        }
-
-
-
-    return None
-
-
-
-
-
-
-# ======================
-# PİYASA TARAMA
-# ======================
-
-
-def scan():
-
-
-    global last_scan_time
-
-
-
-    last_scan_time = datetime.now().strftime(
-
+    last_scan = datetime.now().strftime(
         "%d-%m-%Y %H:%M:%S"
-
     )
-
 
 
     for symbol in SYMBOLS:
 
-
         try:
-
 
             df = get_data(symbol)
 
-
-            result = check_signal(df)
-
+            result = signal_check(df)
 
 
             if result:
 
-
                 key = (
-
                     symbol,
-
                     result["signal"]
-
                 )
 
 
-
                 if key in last_signal:
-
                     continue
-
 
 
                 last_signal[key] = True
 
 
-
-
-                msg = f"""
-
+                send_telegram(
+f"""
 🚨 RSI ALARM
 
 Coin:
 {symbol}
 
-
 Yön:
 {result['signal']}
-
 
 Fiyat:
 {result['price']:.4f}
 
-
 RSI:
 {result['rsi']:.2f}
-
 
 🎯 TP:
 {result['tp']:.4f}
 
-
 🛑 SL:
 {result['sl']:.4f}
 
-
-⏱
-{last_scan_time}
-
+⏱ {last_scan}
 """
-
-
-
-                send_telegram(msg)
-
-
+                )
 
 
         except Exception as e:
 
+            print(symbol, e)
 
-            print(
-
-                symbol,
-
-                "hata:",
-
-                e
-
-            )
-
-
-
-
-
-
-# ======================
-# TELEGRAM KOMUT
-# ======================
 
 
 def telegram_check():
 
-
     global last_update_id
-
-
 
     try:
 
-
-        url = (
-
-            f"https://api.telegram.org/"
-
-            f"bot{BOT_TOKEN}/getUpdates"
-
-        )
-
-
-
-        data = requests.get(
-
-            url,
-
+        r = requests.get(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
             params={
-
-                "offset":
-
-                last_update_id + 1,
-
-                "timeout":5
-
+                "offset": last_update_id + 1,
+                "timeout": 5
             },
-
             timeout=10
-
         ).json()
 
 
+        for u in r.get("result", []):
 
-        for item in data.get(
-
-            "result",
-
-            []
-
-        ):
-
-
-            last_update_id = item["update_id"]
-
-
+            last_update_id = u["update_id"]
 
             text = (
-
-                item
-
-                .get("message",{})
-
-                .get("text","")
-
+                u.get("message", {})
+                .get("text", "")
             )
-
 
 
             if text == "/durum":
 
-
-
                 send_telegram(
-
 f"""
-
 🤖 BOT AKTİF
 
 Son tarama:
+{last_scan}
 
-{last_scan_time}
-
-
-Takip:
-
+Coinler:
 {', '.join(SYMBOLS)}
-
 """
-
                 )
-
 
 
     except Exception as e:
 
-
-        print(
-
-            "Telegram kontrol hata:",
-
-            e
-
-        )
+        print("Telegram kontrol:", e)
 
 
 
-
-
-# ======================
-# ANA DÖNGÜ
-# ======================
+send_telegram("✅ Bot başladı")
 
 
 while True:
 
+    try:
 
-    scan()
+        scan_market()
+
+        telegram_check()
+
+        time.sleep(60)
 
 
-    telegram_check()
+    except Exception as e:
 
+        print("Ana döngü:", e)
 
-    time.sleep(60)
+        time.sleep(10)
