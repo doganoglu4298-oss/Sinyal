@@ -15,7 +15,18 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 client = Client()
 
-SYMBOLS = ["SOLUSDT", "WLDUSDT"]
+SYMBOLS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "AVAXUSDT",
+    "LINKUSDT",
+    "SUIUSDT",
+    "ARBUSDT"
+]
 
 TIMEFRAME = Client.KLINE_INTERVAL_15MINUTE
 
