@@ -4,25 +4,34 @@ import requests
 import pandas as pd
 from binance.client import Client
 
-BOT_TOKEN = os.getenv("8844263738:AAFOWc2MH4BxEeXQoxm7LbIy1YPdQaY6wE8")
-CHAT_ID = os.getenv("8560896518")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-SYMBOLS = ["SOLUSDT", "WLDUSDT"]
-INTERVAL = Client.KLINE_INTERVAL_15MINUTE
+SYMBOLS = [
+    "SOLUSDT",
+    "WLDUSDT"
+]
 
 client = Client()
 
 last_signal = {}
 
-def send_telegram(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={
-        "chat_id": CHAT_ID,
-        "text": text
-    })
+def send_telegram(message):
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": CHAT_ID,
+                "text": message
+            },
+            timeout=10
+        )
+        print("Telegram mesajı gönderildi")
+    except Exception as e:
+        print("Telegram hatası:", e)
 
-def rsi(series, period=14):
-    delta = series.diff()
+def calculate_rsi(close_prices, period=14):
+    delta = close_prices.diff()
 
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -31,48 +40,68 @@ def rsi(series, period=14):
     avg_loss = loss.rolling(period).mean()
 
     rs = avg_gain / avg_loss
+
     return 100 - (100 / (1 + rs))
 
 def check_symbol(symbol):
-    klines = client.get_klines(
-        symbol=symbol,
-        interval=INTERVAL,
-        limit=100
-    )
+    try:
+        print(f"Kontrol ediliyor: {symbol}")
 
-    closes = pd.Series([float(k[4]) for k in klines])
+        klines = client.get_klines(
+            symbol=symbol,
+            interval=Client.KLINE_INTERVAL_15MINUTE,
+            limit=100
+        )
 
-    rsi_values = rsi(closes, 14)
+        closes = pd.Series(
+            [float(k[4]) for k in klines]
+        )
 
-    prev_rsi = rsi_values.iloc[-2]
-    curr_rsi = rsi_values.iloc[-1]
+        rsi = calculate_rsi(closes)
 
-    signal = None
+        prev_rsi = rsi.iloc[-2]
+        curr_rsi = rsi.iloc[-1]
 
-    if prev_rsi < 55 and curr_rsi >= 55:
-        signal = "LONG"
+        print(
+            f"{symbol} RSI Önceki={prev_rsi:.2f} "
+            f"Güncel={curr_rsi:.2f}"
+        )
 
-    elif prev_rsi > 45 and curr_rsi <= 45:
-        signal = "SHORT"
+        signal = None
 
-    if signal:
-        key = f"{symbol}_{signal}"
+        if prev_rsi < 55 and curr_rsi >= 55:
+            signal = "LONG"
 
-        if last_signal.get(symbol) != key:
-            send_telegram(
-                f"🚨 {symbol}\n"
-                f"Sinyal: {signal}\n"
-                f"RSI: {curr_rsi:.2f}\n"
-                f"Zaman Dilimi: 15m"
-            )
-            last_signal[symbol] = key
+        elif prev_rsi > 45 and curr_rsi <= 45:
+            signal = "SHORT"
+
+        if signal:
+            if last_signal.get(symbol) != signal:
+
+                text = (
+                    f"🚨 {symbol}\n"
+                    f"Sinyal: {signal}\n"
+                    f"RSI: {curr_rsi:.2f}\n"
+                    f"Periyot: 15 Dakika"
+                )
+
+                send_telegram(text)
+
+                last_signal[symbol] = signal
+
+    except Exception as e:
+        print(f"{symbol} hata:", e)
+
+print("Bot başlatıldı")
 
 while True:
     try:
         for symbol in SYMBOLS:
             check_symbol(symbol)
 
-    except Exception as e:
-        print(e)
+        print("60 saniye bekleniyor...")
+        time.sleep(60)
 
-    time.sleep(60)
+    except Exception as e:
+        print("Genel hata:", e)
+        time.sleep(60)
