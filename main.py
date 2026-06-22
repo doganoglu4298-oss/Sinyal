@@ -121,12 +121,13 @@ def check_symbol(symbol):
         )
 
         print(
-            f"[{datetime.now().strftime('%H:%M:%S')}] "
-            f"{symbol} | "
-            f"Trend={trend_text} | "
-            f"VWAP={'OK' if above_vwap else 'NO'} | "
-            f"VOL={'OK' if vol_filter else 'NO'} | "
-            f"RSI={current_rsi:.2f}"
+    f"[{datetime.now().strftime('%H:%M:%S')}] "
+    f"{symbol} | "
+    f"Trend={trend_text} | "
+    f"Close={current_close:.4f} | "
+    f"VWAP={vwap.iloc[-1]:.4f} | "
+    f"VOL={df['volume'].iloc[-1]:.0f}/{vol_sma.iloc[-1]:.0f} | "
+    f"RSI={current_rsi:.2f}"
         )
 
         long_signal = (
