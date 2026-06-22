@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import pandas as pd
+from datetime import datetime
 from binance.client import Client
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -26,9 +27,13 @@ def send_telegram(msg):
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": msg},
+            json={
+                "chat_id": CHAT_ID,
+                "text": msg
+            },
             timeout=10
         )
+        print("Telegram mesajı gönderildi")
     except Exception as e:
         print("Telegram hata:", e)
 
@@ -58,7 +63,9 @@ def atr(df, period=14):
     return tr.rolling(period).mean()
 
 def check_symbol(symbol):
+
     try:
+
         klines = client.get_klines(
             symbol=symbol,
             interval=Client.KLINE_INTERVAL_15MINUTE,
@@ -76,18 +83,13 @@ def check_symbol(symbol):
 
         for col in ["open","high","low","close","volume"]:
             df[col] = df[col].astype(float)
-
-        # EMA
-        ema50 = df["close"].ewm(span=50).mean()
+            ema50 = df["close"].ewm(span=50).mean()
         ema200 = df["close"].ewm(span=200).mean()
 
-        # RSI
         rsi_values = rsi(df["close"], RSI_LEN)
 
-        # ATR
         atr_values = atr(df, ATR_LEN)
 
-        # Volume Filter
         vol_sma = df["volume"].rolling(VOL_LEN).mean()
 
         current_close = df["close"].iloc[-1]
@@ -104,7 +106,6 @@ def check_symbol(symbol):
             > vol_sma.iloc[-1]
         )
 
-        # VWAP yaklaşık hesap
         vwap = (
             (df["close"] * df["volume"]).cumsum()
             / df["volume"].cumsum()
@@ -112,6 +113,21 @@ def check_symbol(symbol):
 
         above_vwap = current_close > vwap.iloc[-1]
         below_vwap = current_close < vwap.iloc[-1]
+
+        trend_text = (
+            "BULL" if bull_trend
+            else "BEAR" if bear_trend
+            else "SIDE"
+        )
+
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] "
+            f"{symbol} | "
+            f"Trend={trend_text} | "
+            f"VWAP={'OK' if above_vwap else 'NO'} | "
+            f"VOL={'OK' if vol_filter else 'NO'} | "
+            f"RSI={current_rsi:.2f}"
+        )
 
         long_signal = (
             bull_trend
@@ -139,7 +155,6 @@ def check_symbol(symbol):
             tp = entry + (risk * RR)
 
             if last_signal.get(symbol) != "LONG":
-
                 msg = (
                     f"🚀 LONG\n\n"
                     f"{symbol}\n\n"
@@ -147,7 +162,8 @@ def check_symbol(symbol):
                     f"Stop: {stop:.4f}\n"
                     f"TP: {tp:.4f}\n\n"
                     f"RSI: {current_rsi:.2f}\n"
-                    f"ATR: {current_atr:.4f}"
+                    f"ATR: {current_atr:.4f}\n"
+                    f"RR: {RR}"
                 )
 
                 send_telegram(msg)
@@ -171,25 +187,35 @@ def check_symbol(symbol):
                     f"Stop: {stop:.4f}\n"
                     f"TP: {tp:.4f}\n\n"
                     f"RSI: {current_rsi:.2f}\n"
-                    f"ATR: {current_atr:.4f}"
+                    f"ATR: {current_atr:.4f}\n"
+                    f"RR: {RR}"
                 )
 
                 send_telegram(msg)
                 last_signal[symbol] = "SHORT"
 
-        print(
-            symbol,
-            "RSI:",
-            round(current_rsi, 2)
-        )
-
     except Exception as e:
-        print(symbol, e)
+        print(f"{symbol} hata: {e}")
 
 print("Yusuf Scalp V5 başlatıldı")
 
 while True:
-    for symbol in SYMBOLS:
-        check_symbol(symbol)
+    try:
 
-    time.sleep(60)
+        for symbol in SYMBOLS:
+            check_symbol(symbol)
+
+        print(
+            f"\n[{datetime.now().strftime('%d-%m-%Y %H:%M:%S')}] "
+            f"Tarama tamamlandı. "
+            f"60 saniye sonra tekrar taranacak.\n"
+        )
+
+        time.sleep(60)
+
+    except Exception as e:
+        print(
+            f"[{datetime.now().strftime('%d-%m-%Y %H:%M:%S')}] "
+            f"Genel hata: {e}"
+        )
+        time.sleep(60)
