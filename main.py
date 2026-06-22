@@ -12,26 +12,28 @@ SYMBOLS = [
     "WLDUSDT"
 ]
 
+RSI_LEN = 10
+ATR_LEN = 10
+VOL_LEN = 40
+SL_ATR = 0.8
+RR = 2.5
+
 client = Client()
 
 last_signal = {}
 
-def send_telegram(message):
+def send_telegram(msg):
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": CHAT_ID,
-                "text": message
-            },
+            json={"chat_id": CHAT_ID, "text": msg},
             timeout=10
         )
-        print("Telegram mesajı gönderildi")
     except Exception as e:
-        print("Telegram hatası:", e)
+        print("Telegram hata:", e)
 
-def calculate_rsi(close_prices, period=14):
-    delta = close_prices.diff()
+def rsi(series, period=14):
+    delta = series.diff()
 
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -43,65 +45,151 @@ def calculate_rsi(close_prices, period=14):
 
     return 100 - (100 / (1 + rs))
 
+def atr(df, period=14):
+    high_low = df["high"] - df["low"]
+    high_close = (df["high"] - df["close"].shift()).abs()
+    low_close = (df["low"] - df["close"].shift()).abs()
+
+    tr = pd.concat(
+        [high_low, high_close, low_close],
+        axis=1
+    ).max(axis=1)
+
+    return tr.rolling(period).mean()
+
 def check_symbol(symbol):
     try:
-        print(f"Kontrol ediliyor: {symbol}")
-
         klines = client.get_klines(
             symbol=symbol,
             interval=Client.KLINE_INTERVAL_15MINUTE,
-            limit=100
+            limit=250
         )
 
-        closes = pd.Series(
-            [float(k[4]) for k in klines]
+        df = pd.DataFrame(
+            klines,
+            columns=[
+                "open_time","open","high","low","close","volume",
+                "close_time","qav","num_trades",
+                "taker_base","taker_quote","ignore"
+            ]
         )
 
-        rsi = calculate_rsi(closes)
+        for col in ["open","high","low","close","volume"]:
+            df[col] = df[col].astype(float)
 
-        prev_rsi = rsi.iloc[-2]
-        curr_rsi = rsi.iloc[-1]
+        # EMA
+        ema50 = df["close"].ewm(span=50).mean()
+        ema200 = df["close"].ewm(span=200).mean()
 
-        print(
-            f"{symbol} RSI Önceki={prev_rsi:.2f} "
-            f"Güncel={curr_rsi:.2f}"
+        # RSI
+        rsi_values = rsi(df["close"], RSI_LEN)
+
+        # ATR
+        atr_values = atr(df, ATR_LEN)
+
+        # Volume Filter
+        vol_sma = df["volume"].rolling(VOL_LEN).mean()
+
+        current_close = df["close"].iloc[-1]
+        current_rsi = rsi_values.iloc[-1]
+        prev_rsi = rsi_values.iloc[-2]
+
+        current_atr = atr_values.iloc[-1]
+
+        bull_trend = ema50.iloc[-1] > ema200.iloc[-1]
+        bear_trend = ema50.iloc[-1] < ema200.iloc[-1]
+
+        vol_filter = (
+            df["volume"].iloc[-1]
+            > vol_sma.iloc[-1]
         )
 
-        signal = None
+        # VWAP yaklaşık hesap
+        vwap = (
+            (df["close"] * df["volume"]).cumsum()
+            / df["volume"].cumsum()
+        )
 
-        if prev_rsi < 55 and curr_rsi >= 55:
-            signal = "LONG"
+        above_vwap = current_close > vwap.iloc[-1]
+        below_vwap = current_close < vwap.iloc[-1]
 
-        elif prev_rsi > 45 and curr_rsi <= 45:
-            signal = "SHORT"
+        long_signal = (
+            bull_trend
+            and above_vwap
+            and prev_rsi < 45
+            and current_rsi >= 45
+            and vol_filter
+        )
 
-        if signal:
-            if last_signal.get(symbol) != signal:
+        short_signal = (
+            bear_trend
+            and below_vwap
+            and prev_rsi > 55
+            and current_rsi <= 55
+            and vol_filter
+        )
 
-                text = (
-                    f"🚨 {symbol}\n"
-                    f"Sinyal: {signal}\n"
-                    f"RSI: {curr_rsi:.2f}\n"
-                    f"Periyot: 15 Dakika"
+        if long_signal:
+
+            entry = current_close
+            stop = entry - (current_atr * SL_ATR)
+
+            risk = entry - stop
+
+            tp = entry + (risk * RR)
+
+            if last_signal.get(symbol) != "LONG":
+
+                msg = (
+                    f"🚀 LONG\n\n"
+                    f"{symbol}\n\n"
+                    f"Giriş: {entry:.4f}\n"
+                    f"Stop: {stop:.4f}\n"
+                    f"TP: {tp:.4f}\n\n"
+                    f"RSI: {current_rsi:.2f}\n"
+                    f"ATR: {current_atr:.4f}"
                 )
 
-                send_telegram(text)
+                send_telegram(msg)
+                last_signal[symbol] = "LONG"
 
-                last_signal[symbol] = signal
+        elif short_signal:
+
+            entry = current_close
+            stop = entry + (current_atr * SL_ATR)
+
+            risk = stop - entry
+
+            tp = entry - (risk * RR)
+
+            if last_signal.get(symbol) != "SHORT":
+
+                msg = (
+                    f"🔻 SHORT\n\n"
+                    f"{symbol}\n\n"
+                    f"Giriş: {entry:.4f}\n"
+                    f"Stop: {stop:.4f}\n"
+                    f"TP: {tp:.4f}\n\n"
+                    f"RSI: {current_rsi:.2f}\n"
+                    f"ATR: {current_atr:.4f}"
+                )
+
+                send_telegram(msg)
+                last_signal[symbol] = "SHORT"
+
+        print(
+            symbol,
+            "RSI:",
+            round(current_rsi, 2)
+        )
 
     except Exception as e:
-        print(f"{symbol} hata:", e)
+        print(symbol, e)
 
-print("Bot başlatıldı")
+print("Yusuf Scalp V5 başlatıldı")
 
 while True:
-    try:
-        for symbol in SYMBOLS:
-            check_symbol(symbol)
+    for symbol in SYMBOLS:
+        check_symbol(symbol)
 
-        print("60 saniye bekleniyor...")
-        time.sleep(60)
-
-    except Exception as e:
-        print("Genel hata:", e)
-        time.sleep(60)
+    time.sleep(60)
