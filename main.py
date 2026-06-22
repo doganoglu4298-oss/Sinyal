@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import pandas as pd
+import csv
 from datetime import datetime
 from binance.client import Client
 
@@ -25,18 +26,10 @@ VOL_LEN = 40
 SL_ATR = 0.8
 RR = 2.5
 
-# ======================
-# TRACKER
-# ======================
+JOURNAL_FILE = "journal.csv"
 
-trade_stats = {
-    "LONG": {"signal": 0, "win": 0},
-    "SHORT": {"signal": 0, "win": 0}
-}
-
+positions = {}
 last_signal = {}
-last_update_id = 0
-last_scan = "none"
 
 
 # ======================
@@ -52,6 +45,41 @@ def send(msg):
         )
     except:
         pass
+
+
+# ======================
+# JOURNAL INIT
+# ======================
+
+def init_journal():
+    if not os.path.exists(JOURNAL_FILE):
+        with open(JOURNAL_FILE, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "time", "symbol", "side",
+                "entry", "exit", "pnl", "result"
+            ])
+
+
+# ======================
+# LOG TRADE
+# ======================
+
+def log_trade(symbol, side, entry, exit_price, result):
+
+    pnl = ((exit_price - entry) / entry) * 100 if side == "LONG" else ((entry - exit_price) / entry) * 100
+
+    with open(JOURNAL_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            datetime.now(),
+            symbol,
+            side,
+            entry,
+            exit_price,
+            round(pnl, 2),
+            result
+        ])
 
 
 # ======================
@@ -110,7 +138,43 @@ def get_data(symbol):
 
 
 # ======================
-# STRATEGY ENGINE
+# POSITION TRACKER
+# ======================
+
+def update_positions(symbol, price):
+
+    if symbol not in positions:
+        return
+
+    pos = positions[symbol]
+
+    if pos["side"] == "LONG":
+
+        if price >= pos["tp"]:
+            log_trade(symbol, "LONG", pos["entry"], price, "WIN")
+            send(f"✅ WIN LONG {symbol} | Exit: {price}")
+            del positions[symbol]
+
+        elif price <= pos["sl"]:
+            log_trade(symbol, "LONG", pos["entry"], price, "LOSS")
+            send(f"❌ LOSS LONG {symbol} | Exit: {price}")
+            del positions[symbol]
+
+    elif pos["side"] == "SHORT":
+
+        if price <= pos["tp"]:
+            log_trade(symbol, "SHORT", pos["entry"], price, "WIN")
+            send(f"✅ WIN SHORT {symbol} | Exit: {price}")
+            del positions[symbol]
+
+        elif price >= pos["sl"]:
+            log_trade(symbol, "SHORT", pos["entry"], price, "LOSS")
+            send(f"❌ LOSS SHORT {symbol} | Exit: {price}")
+            del positions[symbol]
+
+
+# ======================
+# STRATEGY
 # ======================
 
 def check(symbol):
@@ -126,12 +190,8 @@ def check(symbol):
         vol_ma = df["volume"].rolling(VOL_LEN).mean()
 
         last = df.iloc[-1]
-        prev = df.iloc[-2]
 
         price = last["close"]
-
-        if pd.isna(a.iloc[-1]) or pd.isna(r.iloc[-1]):
-            return
 
         current_rsi = r.iloc[-1]
         prev_rsi = r.iloc[-2]
@@ -184,91 +244,93 @@ def check(symbol):
         # LONG
         # ======================
 
-        if long_signal:
+        if long_signal and symbol not in positions:
 
-            trade_stats["LONG"]["signal"] += 1
+            entry = price
+            sl = entry - (current_atr * SL_ATR)
+            tp = entry + ((entry - sl) * RR)
 
-            sl = price - (current_atr * SL_ATR)
-            tp = price + ((price - sl) * RR)
+            positions[symbol] = {
+                "side": "LONG",
+                "entry": entry,
+                "sl": sl,
+                "tp": tp
+            }
 
-            if last_signal.get(symbol) != "LONG":
-
-                send(f"""
-🚀 LONG V5+
+            send(f"""
+🚀 PAPER LONG
 
 {symbol}
-
-Entry: {price:.4f}
-SL: {sl:.4f}
-TP: {tp:.4f}
-
-RSI: {current_rsi:.2f}
+Entry: {entry}
+SL: {sl}
+TP: {tp}
 """)
-
-                last_signal[symbol] = "LONG"
 
         # ======================
         # SHORT
         # ======================
 
-        elif short_signal:
+        elif short_signal and symbol not in positions:
 
-            trade_stats["SHORT"]["signal"] += 1
+            entry = price
+            sl = entry + (current_atr * SL_ATR)
+            tp = entry - ((sl - entry) * RR)
 
-            sl = price + (current_atr * SL_ATR)
-            tp = price - ((sl - price) * RR)
+            positions[symbol] = {
+                "side": "SHORT",
+                "entry": entry,
+                "sl": sl,
+                "tp": tp
+            }
 
-            if last_signal.get(symbol) != "SHORT":
-
-                send(f"""
-🔻 SHORT V5+
+            send(f"""
+🔻 PAPER SHORT
 
 {symbol}
-
-Entry: {price:.4f}
-SL: {sl:.4f}
-TP: {tp:.4f}
-
-RSI: {current_rsi:.2f}
+Entry: {entry}
+SL: {sl}
+TP: {tp}
 """)
 
-                last_signal[symbol] = "SHORT"
+        # POSITION UPDATE
+        update_positions(symbol, price)
 
     except Exception as e:
         print(symbol, "error:", e)
 
 
 # ======================
-# TELEGRAM COMMANDS
+# JOURNAL STATS
 # ======================
 
-def telegram_commands(text):
+def journal_stats():
 
-    total = trade_stats["LONG"]["signal"] + trade_stats["SHORT"]["signal"]
-    wins = trade_stats["LONG"]["win"] + trade_stats["SHORT"]["win"]
+    wins = 0
+    losses = 0
 
+    if not os.path.exists(JOURNAL_FILE):
+        return
+
+    with open(JOURNAL_FILE, "r") as f:
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            if row["result"] == "WIN":
+                wins += 1
+            else:
+                losses += 1
+
+    total = wins + losses
     winrate = (wins / total * 100) if total > 0 else 0
 
-    if text == "/stats":
+    send(f"""
+📊 JOURNAL
 
-        send(f"""
-📊 V5+ STATS
-
-Total Signals: {total}
+Total: {total}
 Wins: {wins}
+Loss: {losses}
 Winrate: %{winrate:.2f}
-
-LONG: {trade_stats['LONG']}
-SHORT: {trade_stats['SHORT']}
 """)
-
-    if text == "/win LONG":
-        trade_stats["LONG"]["win"] += 1
-        send("LONG WIN +1")
-
-    if text == "/win SHORT":
-        trade_stats["SHORT"]["win"] += 1
-        send("SHORT WIN +1")
 
 
 # ======================
@@ -277,22 +339,18 @@ SHORT: {trade_stats['SHORT']}
 
 def telegram_poll():
 
-    global last_update_id
-
     try:
         r = requests.get(
             f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
-            params={"offset": last_update_id + 1},
             timeout=10
         ).json()
 
         for u in r.get("result", []):
 
-            last_update_id = u["update_id"]
-
             text = u.get("message", {}).get("text", "")
 
-            telegram_commands(text)
+            if text == "/journal":
+                journal_stats()
 
     except:
         pass
@@ -302,9 +360,10 @@ def telegram_poll():
 # START
 # ======================
 
-send("✅ V5+ Railway Bot Started")
+init_journal()
+send("✅ V5+ JOURNAL BOT STARTED")
 
-print("V5+ running...")
+print("running...")
 
 while True:
     try:
