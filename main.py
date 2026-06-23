@@ -391,7 +391,7 @@ print("running...")
 
 while True:
     try:
-        for s in SYMBOLS:
+        for s in SYMBOYLS:
             check(s)
 
         telegram_poll()
