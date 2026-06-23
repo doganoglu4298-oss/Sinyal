@@ -42,6 +42,10 @@ JOURNAL_FILE = "journal.csv"
 positions = {}
 last_signal = {}
 
+positions = {}
+last_signal = {}
+
+last_update_id = 0
 
 # ======================
 # TELEGRAM
@@ -350,6 +354,8 @@ Winrate: %{winrate:.2f}
 
 def telegram_poll():
 
+    global last_update_id
+
     try:
         r = requests.get(
             f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
@@ -357,6 +363,13 @@ def telegram_poll():
         ).json()
 
         for u in r.get("result", []):
+
+            update_id = u["update_id"]
+
+            if update_id <= last_update_id:
+                continue
+
+            last_update_id = update_id
 
             text = u.get("message", {}).get("text", "")
 
