@@ -34,7 +34,7 @@ RSI_LEN = 10
 ATR_LEN = 10
 VOL_LEN = 40
 
-SL_ATR = 0.8
+SL_ATR = 1.5
 RR = 2.5
 
 JOURNAL_FILE = "journal.csv"
