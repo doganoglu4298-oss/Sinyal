@@ -241,8 +241,8 @@ def check(symbol):
             and vol_ok
             and atr_filter
             and rsi_momentum
-            and prev_rsi < 48
-            and current_rsi >= 48
+            and prev_rsi < 50
+            and current_rsi >= 50
         )
 
         short_signal = (
@@ -251,8 +251,8 @@ def check(symbol):
             and vol_ok
             and atr_filter
             and rsi_momentum
-            and prev_rsi > 52
-            and current_rsi <= 52
+            and prev_rsi > 50
+            and current_rsi <= 50
         )
 
         # ======================
